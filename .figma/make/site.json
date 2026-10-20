@@ -1,0 +1,10 @@
+{
+  "description": "Manage and optimize RoadRider's mobility, commerce, and logistics ecosystem with a comprehensive admin panel for real-time operations, analytics, and support.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

@@ -1,33 +1,18 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createClient } from '@supabase/supabase-js';
-import fs from 'node:fs';
-import path from 'node:path';
+// BUG-003 FIX: Removed unused fs/path imports — external .env path traversal eliminated
 
-// Load Supabase credentials securely on server side only
+// BUG-003 FIX: Load Supabase credentials exclusively from environment variables.
+// No external Vendor-Module path traversal – set SUPABASE_SERVICE_ROLE_KEY in .env
 function getSupabaseAdmin() {
-  const envPath = path.resolve(__dirname, '../../Vendor-Module/supabase/functions/.env');
-  let serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  let supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-
-  if (!serviceRoleKey && fs.existsSync(envPath)) {
-    const raw = fs.readFileSync(envPath, 'utf8');
-    const matchKey = raw.match(/SUPABASE_SERVICE_ROLE_KEY=(.*)/);
-    const matchUrl = raw.match(/SUPABASE_URL=(.*)/);
-    if (matchKey) serviceRoleKey = matchKey[1].trim();
-    if (matchUrl && !supabaseUrl) supabaseUrl = matchUrl[1].trim();
-  }
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 
   if (!supabaseUrl) {
-    const localEnvPath = path.resolve(__dirname, '../.env');
-    if (fs.existsSync(localEnvPath)) {
-      const raw = fs.readFileSync(localEnvPath, 'utf8');
-      const matchUrl = raw.match(/VITE_SUPABASE_URL=(.*)/);
-      if (matchUrl) supabaseUrl = matchUrl[1].trim();
-    }
+    throw new Error('SUPABASE_URL (or VITE_SUPABASE_URL) environment variable is not set');
   }
-
-  if (!supabaseUrl || !serviceRoleKey) {
-    throw new Error('Supabase admin credentials not configured on server');
+  if (!serviceRoleKey) {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY environment variable is not set. Add it to .env');
   }
 
   return createClient(supabaseUrl, serviceRoleKey, {
@@ -59,9 +44,8 @@ async function parseBody(req: IncomingMessage): Promise<any> {
   });
 }
 
-const SUPER_ADMIN_EMAIL = 'techroadrider@gmail.com';
-const SUPER_ADMIN_ID = 'a526a5c8-80d6-491b-b188-3f450878ad90';
-
+// BUG-003 FIX: Super Admin identity verified dynamically via DB profile role check.
+// No hardcoded email or UUID constants.
 async function verifySuperAdmin(req: IncomingMessage, supabaseAdmin: any) {
   const authHeader = req.headers['authorization'];
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -75,9 +59,15 @@ async function verifySuperAdmin(req: IncomingMessage, supabaseAdmin: any) {
     return { ok: false, status: 401, error: 'Invalid or expired authentication session' };
   }
 
-  const isSuper = user.id === SUPER_ADMIN_ID || user.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
-  if (!isSuper) {
-    return { ok: false, status: 403, error: 'Unauthorized: Only the designated Super Admin can manage sub-admin accounts' };
+  // BUG-003 FIX: Check DB profile role instead of hardcoded email/UUID
+  const { data: profile } = await supabaseAdmin
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (!profile || profile.role !== 'admin') {
+    return { ok: false, status: 403, error: 'Unauthorized: Only verified admin accounts can manage sub-admins' };
   }
 
   return { ok: true, user };
@@ -135,7 +125,9 @@ export async function handleSubAdminRequest(req: IncomingMessage, res: ServerRes
       const cleanEmail = email.trim().toLowerCase();
 
       // Check if email already belongs to Super Admin
-      if (cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase()) {
+      // BUG-003 FIX: Super Admin email check via env variable instead of hardcoded value
+      const superAdminEmail = (process.env.SUPER_ADMIN_EMAIL || '').toLowerCase();
+      if (superAdminEmail && cleanEmail === superAdminEmail) {
         sendJson(res, 400, { error: 'Cannot create a sub-admin with the Super Admin email' });
         return true;
       }
@@ -155,11 +147,15 @@ export async function handleSubAdminRequest(req: IncomingMessage, res: ServerRes
 
       if (createErr) {
         // If user already exists in Auth, retrieve and update password
+        // BUG-016 FIX: Use direct DB profile query instead of listUsers(perPage:1000)
         if (createErr.message?.toLowerCase().includes('already registered')) {
-          const { data: listData } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
-          const existing = listData?.users?.find((u: any) => u.email?.toLowerCase() === cleanEmail);
-          if (existing) {
-            authUserId = existing.id;
+          const { data: existingProfile } = await supabaseAdmin
+            .from('profiles')
+            .select('id')
+            .eq('email', cleanEmail)
+            .maybeSingle();
+          if (existingProfile?.id) {
+            authUserId = existingProfile.id as string;
             await supabaseAdmin.auth.admin.updateUserById(authUserId, {
               password: password,
               user_metadata: {
@@ -194,6 +190,7 @@ export async function handleSubAdminRequest(req: IncomingMessage, res: ServerRes
       });
 
       // 3. Upsert admin_users table record
+      // BUG-006 FIX: permissions is now included in the upsert payload
       const { data: adminUserRow, error: adminUserErr } = await supabaseAdmin
         .from('admin_users')
         .upsert(
@@ -205,6 +202,7 @@ export async function handleSubAdminRequest(req: IncomingMessage, res: ServerRes
             department: department || 'Ground Operations',
             city_access: cityAccess || 'Lucknow',
             status: 'Active',
+            permissions: permissions || {},
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'auth_user_id' }
@@ -242,6 +240,103 @@ export async function handleSubAdminRequest(req: IncomingMessage, res: ServerRes
       return true;
     }
 
+
+    // ── 1b. UPDATE SUB-ADMIN (edit profile without mandatory password) ────
+    if (subPath === 'update') {
+      const { id, name, role, department, cityAccess, permissions } = body;
+
+      if (!id) {
+        sendJson(res, 400, { error: 'Sub-admin ID is required for update' });
+        return true;
+      }
+
+      const { data: existing } = await supabaseAdmin
+        .from('admin_users')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (!existing) {
+        sendJson(res, 404, { error: 'Sub-admin not found' });
+        return true;
+      }
+
+      const updatePayload: Record<string, any> = { updated_at: new Date().toISOString() };
+      if (name?.trim()) updatePayload.name = name.trim();
+      if (role) updatePayload.admin_role = role;
+      if (department) updatePayload.department = department;
+      if (cityAccess) updatePayload.city_access = cityAccess;
+      if (permissions !== undefined) updatePayload.permissions = permissions;
+
+      const { data: updated, error: updateErr } = await supabaseAdmin
+        .from('admin_users')
+        .update(updatePayload)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (updateErr) {
+        sendJson(res, 500, { error: updateErr.message });
+        return true;
+      }
+
+      await supabaseAdmin.from('audit_logs').insert({
+        user_id: superAdmin?.id,
+        action: 'SUB_ADMIN_UPDATED',
+        entity_type: 'admin_user',
+        entity_id: id,
+        details: { name, role, department, cityAccess },
+      });
+
+      sendJson(res, 200, { success: true, message: `Sub-admin updated`, data: updated });
+      return true;
+    }
+
+    // ── 1c. DELETE SUB-ADMIN ──────────────────────────────────────────────
+    if (subPath === 'delete') {
+      const { id } = body;
+      if (!id) {
+        sendJson(res, 400, { error: 'Sub-admin ID is required' });
+        return true;
+      }
+
+      const { data: targetAdmin } = await supabaseAdmin
+        .from('admin_users')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (!targetAdmin) {
+        sendJson(res, 404, { error: 'Sub-admin not found' });
+        return true;
+      }
+
+      const superAdminEmailCheck = (process.env.SUPER_ADMIN_EMAIL || '').toLowerCase();
+      if (superAdminEmailCheck && targetAdmin.email?.toLowerCase() === superAdminEmailCheck) {
+        sendJson(res, 403, { error: 'The Super Admin account cannot be deleted' });
+        return true;
+      }
+
+      // Delete auth user (revokes all sessions)
+      if (targetAdmin.auth_user_id) {
+        await supabaseAdmin.auth.admin.deleteUser(targetAdmin.auth_user_id);
+      }
+
+      // Delete admin_users record
+      await supabaseAdmin.from('admin_users').delete().eq('id', id);
+
+      await supabaseAdmin.from('audit_logs').insert({
+        user_id: superAdmin?.id,
+        action: 'SUB_ADMIN_DELETED',
+        entity_type: 'admin_user',
+        entity_id: id,
+        details: { targetEmail: targetAdmin.email },
+      });
+
+      sendJson(res, 200, { success: true, message: 'Sub-admin deleted and auth session revoked' });
+      return true;
+    }
+
     // ── 2. TOGGLE SUB-ADMIN STATUS ──────────────────────────────────────
     if (subPath === 'toggle-status') {
       const { id, nextStatus } = body;
@@ -261,7 +356,9 @@ export async function handleSubAdminRequest(req: IncomingMessage, res: ServerRes
         return true;
       }
 
-      if (targetAdmin.auth_user_id === SUPER_ADMIN_ID || targetAdmin.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()) {
+      // BUG-003 FIX: Dynamic super admin check via env
+      const superAdminEmail = (process.env.SUPER_ADMIN_EMAIL || '').toLowerCase();
+      if (superAdminEmail && targetAdmin.email?.toLowerCase() === superAdminEmail) {
         sendJson(res, 403, { error: 'The Super Admin account cannot be suspended or modified here' });
         return true;
       }
@@ -311,7 +408,9 @@ export async function handleSubAdminRequest(req: IncomingMessage, res: ServerRes
         return true;
       }
 
-      if (targetAdmin.auth_user_id === SUPER_ADMIN_ID || targetAdmin.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()) {
+      // BUG-003 FIX: Dynamic super admin check via env
+      const superAdminEmailForReset = (process.env.SUPER_ADMIN_EMAIL || '').toLowerCase();
+      if (superAdminEmailForReset && targetAdmin.email?.toLowerCase() === superAdminEmailForReset) {
         sendJson(res, 403, { error: 'Cannot reset Super Admin password via this endpoint' });
         return true;
       }

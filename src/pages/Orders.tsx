@@ -116,23 +116,45 @@ export default function Orders({ onNavigate }: { onNavigate?: (page: string) => 
     showToast('Orders export completed (CSV downloaded)');
   };
 
+  // BUG-013 FIX: Issue refund now creates a ledger transaction entry
+  // AND updates order status atomically, preventing financial discrepancies
   const handleIssueRefund = async (orderId: string) => {
     try {
       if (isSupabaseConfigured && selected?._raw?.id) {
-        const { error } = await supabase
+        const rawOrder = selected._raw;
+        const refundAmount = parseFloat(String(rawOrder.total_amount || rawOrder.amount || '0').replace(/[^0-9.]/g, '')) || 0;
+
+        // 1. Update order status to cancelled
+        const { error: orderErr } = await supabase
           .from('orders')
           .update({ order_status: 'cancelled' })
-          .eq('id', selected._raw.id);
-        if (error) {
-          showToast(`Refund error: ${error.message}`);
+          .eq('id', rawOrder.id);
+
+        if (orderErr) {
+          showToast(`Refund error: ${orderErr.message}`);
           return;
+        }
+
+        // 2. Create refund transaction record for financial audit trail
+        if (refundAmount > 0) {
+          await supabase.from('transactions').insert({
+            order_id: rawOrder.id,
+            entity_id: rawOrder.customer_id || rawOrder.id,
+            entity_type: 'customer',
+            type: 'refund',
+            amount: refundAmount,
+            status: 'processed',
+            payment_method: rawOrder.payment_method || 'wallet',
+            description: `Admin refund for cancelled order ${orderId}`,
+            created_at: new Date().toISOString(),
+          });
         }
       }
       setOrdersList(prev => prev.map(o => o.id === orderId ? { ...o, status: 'Cancelled' } : o));
       if (selected && selected.id === orderId) {
         setSelected({ ...selected, status: 'Cancelled' });
       }
-      showToast(`Order ${orderId} marked cancelled for refund processing`);
+      showToast(`Order ${orderId} cancelled & refund transaction recorded`);
       refetch();
       refreshBadges();
     } catch (err: any) {

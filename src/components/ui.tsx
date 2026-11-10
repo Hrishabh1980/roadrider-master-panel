@@ -250,9 +250,12 @@ export function DataTable({ columns, rows, onRowClick }: {
           </tbody>
         </table>
       </div>
+      {/* BUG-018 FIX: Sliding pagination window + correct empty-table disable logic */}
       <div className="flex items-center justify-between mt-3">
         <p className="text-xs text-[#9C9A9A]">
-          Showing {Math.min((page - 1) * perPage + 1, total)}–{Math.min(page * perPage, total)} of {total} records
+          {total === 0
+            ? 'No records found'
+            : `Showing ${Math.min((page - 1) * perPage + 1, total)}–${Math.min(page * perPage, total)} of ${total} records`}
         </p>
         <div className="flex items-center gap-1">
           <button
@@ -262,18 +265,26 @@ export function DataTable({ columns, rows, onRowClick }: {
           >
             <ChevronLeft className="w-3.5 h-3.5" />
           </button>
-          {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-            const n = i + 1;
-            return (
-              <button key={n} onClick={() => setPage(n)}
-                className={`w-7 h-7 rounded text-xs font-semibold transition-colors ${n === page ? 'bg-black text-white' : 'text-[#464646] hover:bg-[#F5F5F5]'}`}>
-                {n}
-              </button>
-            );
-          })}
+          {(() => {
+            // Sliding window: always show 5 pages centred around current page
+            const windowSize = 5;
+            const half = Math.floor(windowSize / 2);
+            let start = Math.max(1, page - half);
+            let end = Math.min(totalPages, start + windowSize - 1);
+            if (end - start < windowSize - 1) start = Math.max(1, end - windowSize + 1);
+            return Array.from({ length: end - start + 1 }, (_, i) => {
+              const n = start + i;
+              return (
+                <button key={n} onClick={() => setPage(n)}
+                  className={`w-7 h-7 rounded text-xs font-semibold transition-colors ${n === page ? 'bg-black text-white' : 'text-[#464646] hover:bg-[#F5F5F5]'}`}>
+                  {n}
+                </button>
+              );
+            });
+          })()}
           <button
             onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
+            disabled={page >= totalPages || totalPages === 0}
             className="p-1.5 rounded border border-[#E8E8E8] disabled:opacity-30 hover:border-black transition-colors"
           >
             <ChevronRight className="w-3.5 h-3.5" />

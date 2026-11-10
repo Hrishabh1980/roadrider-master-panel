@@ -91,16 +91,18 @@ export default function Pricing() {
     e.preventDefault();
     if (isSupabaseConfigured) {
       try {
+        // BUG-009 FIX: Column names aligned with supabase_schema.sql
         const { error } = await supabase.from('pricing_rules').insert({
-          service_type: newService.toLowerCase(),
+          service: newService.toLowerCase(),
           base_fee: Number(newBaseFee) || 0,
-          distance_fee_per_km: Number(newDistFee) || 0,
-          platform_fee_pct: Number(newPlatformFee) || 0,
-          delivery_fee: Number(newDelivFee) || 0,
+          dist_fee: `₹${Number(newDistFee) || 0}/km`,
+          platform_fee: `${Number(newPlatformFee) || 0}%`,
+          deliv_fee: Number(newDelivFee) || 0,
           min_fare: Number(newMinFare) || 0,
           max_fare: Number(newMaxFare) || null,
-          status: 'active',
-          version: 1,
+          status: 'Active',
+          version: 'v1',
+          city: 'Lucknow',
         });
 
         if (error) {
@@ -121,13 +123,15 @@ export default function Pricing() {
     e.preventDefault();
     if (isSupabaseConfigured) {
       try {
+        // BUG-009 FIX: Column names aligned with supabase_schema.sql
         const { error } = await supabase.from('surge_rules').insert({
-          service_type: surgeService.toLowerCase(),
-          zone_name: surgeZone,
-          multiplier: Number(surgeMultiplier) || 1.0,
+          service: surgeService.toLowerCase(),
+          zone: surgeZone,
+          multiplier: `${Number(surgeMultiplier) || 1.5}x`,
           start_time: surgeStart,
           end_time: surgeEnd,
-          is_active: true,
+          status: 'Active',
+          ratio: Number(surgeMultiplier) || 1.5,
         });
 
         if (error) {

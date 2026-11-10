@@ -617,18 +617,36 @@ export default function AdminAssignment() {
     loadSubAdmins();
   }, []);
 
+  // BUG-006 FIX: When editing an existing admin, call the /update endpoint (no mandatory password).
+  // When creating a new admin, call /create (requires password).
   const handleSave = async (admin: SubAdmin) => {
     try {
-      await subAdminApi.create({
-        name: admin.name,
-        email: admin.email,
-        password: admin.password,
-        role: admin.role,
-        department: admin.department,
-        cityAccess: admin.cityAccess,
-        permissions: admin.permissions,
-      });
-      showToast(editAdmin ? `${admin.name}'s permissions updated` : `✅ ${admin.name} created & assigned`);
+      if (editAdmin) {
+        // Update path: password is optional
+        await subAdminApi.update({
+          id: editAdmin.id,
+          name: admin.name,
+          role: admin.role,
+          department: admin.department,
+          cityAccess: admin.cityAccess,
+          permissions: admin.permissions,
+          // Only send password if admin explicitly set a new one
+          ...(admin.password && admin.password.length >= 6 ? { newPassword: admin.password } : {}),
+        });
+        showToast(`✅ ${admin.name}'s profile and permissions updated`);
+      } else {
+        // Create path: password is required
+        await subAdminApi.create({
+          name: admin.name,
+          email: admin.email,
+          password: admin.password,
+          role: admin.role,
+          department: admin.department,
+          cityAccess: admin.cityAccess,
+          permissions: admin.permissions,
+        });
+        showToast(`✅ ${admin.name} created & assigned`);
+      }
       setShowForm(false);
       setEditAdmin(undefined);
       loadSubAdmins();
@@ -637,17 +655,23 @@ export default function AdminAssignment() {
     }
   };
 
-  const handleDelete = (id: string) => {
-    setAdmins(prev => prev.filter(a => a.id !== id));
-    setDeleteConfirm(null);
-    showToast('Admin user removed');
+  // BUG-007 FIX: handleDelete calls the real API to delete from Auth + DB
+  // BUG-003 FIX: Super Admin guard is now server-side (no hardcoded email here)
+  const handleDelete = async (id: string) => {
+    try {
+      await subAdminApi.delete(id);
+      // Only remove from local state after confirmed server deletion
+      setAdmins(prev => prev.filter(a => a.id !== id));
+      setDeleteConfirm(null);
+      showToast('✅ Admin user removed and auth session revoked');
+    } catch (err: any) {
+      setDeleteConfirm(null);
+      showToast(`❌ Failed to delete admin: ${err.message}`);
+    }
   };
 
+  // BUG-003 FIX: Super Admin guard is handled server-side; no hardcoded email check here
   const toggleStatus = async (admin: SubAdmin) => {
-    if (admin.email?.toLowerCase() === 'techroadrider@gmail.com') {
-      showToast('❌ Super Admin account cannot be suspended');
-      return;
-    }
     try {
       await subAdminApi.toggleStatus(admin.id, admin.status);
       showToast(`✅ ${admin.name} ${admin.status === 'Active' ? 'suspended' : 'activated'}`);

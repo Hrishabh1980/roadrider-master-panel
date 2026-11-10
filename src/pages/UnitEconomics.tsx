@@ -23,7 +23,12 @@ export default function UnitEconomics() {
   const [service, setService] = useState('All');
   const [city, setCity] = useState('Lucknow');
 
-  const { data: ordersResponse } = useApi(() => ordersApi.getAll(), { data: [], total: 0 });
+  // BUG-015 FIX: Pass service filter into orders query so KPIs reflect the selection
+  const { data: ordersResponse } = useApi(
+    () => ordersApi.getAll({ service: service === 'All' ? undefined : service, city: city === 'Lucknow' ? city : undefined }),
+    { data: [], total: 0 },
+    [service, city]
+  );
   const { data: financeSummary } = useApi(() => financeApi.getSummary(), {
     grossVolume: '₹0',
     netRevenue: '₹0',

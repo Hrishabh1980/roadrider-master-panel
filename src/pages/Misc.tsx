@@ -674,21 +674,26 @@ export function Dispatch({ onNavigate }: { onNavigate?: (page: string) => void }
   const unassignedJobs = jobs.filter(j => j.partner === '—' || j.status === 'Searching' || j.status === 'Pending');
   const availablePartners = partnersData?.data || [];
 
+  // BUG-014 FIX: Auto-assign sets status to 'assigned' (not in_transit).
+  // A production implementation should use proximity/zone matching via
+  // a server-side RPC rather than selecting availablePartners[0].
   const handleAutoAssign = async (jobId: string) => {
     if (availablePartners.length === 0) {
       showToast('No active online partners available to assign');
       return;
     }
+    // TODO: Replace with server-side proximity-based selection
+    // For now, pick first available partner as placeholder
     const partner = availablePartners[0];
     try {
       const job = unassignedJobs.find(j => j.id === jobId);
       if (isSupabaseConfigured && job?._raw?.id) {
         await supabase.from('orders').update({
           partner_id: partner._raw?.id || partner.id,
-          order_status: 'in_transit'
+          order_status: 'assigned', // BUG-014 FIX: was 'in_transit' - should be 'assigned'
         }).eq('id', job._raw.id);
       }
-      showToast(`Job ${jobId} auto-assigned to ${partner.name}`);
+      showToast(`Job ${jobId} assigned to ${partner.name} — awaiting partner confirmation`);
       refetch();
       refreshBadges();
     } catch (err: any) {
@@ -779,13 +784,217 @@ export function Dispatch({ onNavigate }: { onNavigate?: (page: string) => void }
 
 // ── Slots page ──────────────────────────────────────────────────────────────────
 export function Slots({ onNavigate }: { onNavigate?: (page: string) => void }) {
+  const [activeTab, setActiveTab] = React.useState<'shifts' | 'capacity'>('shifts');
+  const [showAddModal, setShowAddModal] = React.useState(false);
+  const [toast, setToast] = React.useState<string | null>(null);
+  const [shifts, setShifts] = React.useState([
+    { id: 'SHF-001', zone: 'Lucknow Central', service: 'Food Delivery', date: '2026-11-10', start: '08:00', end: '14:00', slots: 12, booked: 9, status: 'Active' },
+    { id: 'SHF-002', zone: 'Gomti Nagar', service: 'Ride', date: '2026-11-10', start: '14:00', end: '20:00', slots: 8, booked: 5, status: 'Active' },
+    { id: 'SHF-003', zone: 'Hazratganj', service: 'Grocery', date: '2026-11-10', start: '20:00', end: '23:59', slots: 6, booked: 6, status: 'Full' },
+    { id: 'SHF-004', zone: 'Alambagh', service: 'Courier', date: '2026-11-11', start: '09:00', end: '15:00', slots: 10, booked: 2, status: 'Open' },
+  ]);
+  const [form, setForm] = React.useState({ zone: 'Lucknow Central', service: 'Food Delivery', date: '', start: '08:00', end: '14:00', slots: '10' });
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3000); };
+
+  const handleAddShift = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.date) { showToast('Please select a date.'); return; }
+    const newShift = {
+      id: `SHF-${String(shifts.length + 1).padStart(3, '0')}`,
+      zone: form.zone, service: form.service, date: form.date,
+      start: form.start, end: form.end,
+      slots: parseInt(form.slots, 10) || 10,
+      booked: 0, status: 'Open',
+    };
+    setShifts(prev => [newShift, ...prev]);
+    setShowAddModal(false);
+    setForm({ zone: 'Lucknow Central', service: 'Food Delivery', date: '', start: '08:00', end: '14:00', slots: '10' });
+    showToast(`Shift ${newShift.id} created for ${form.zone}`);
+  };
+
+  const handleDeleteShift = (id: string) => {
+    if (!window.confirm(`Delete shift ${id}?`)) return;
+    setShifts(prev => prev.filter(s => s.id !== id));
+    showToast(`Shift ${id} removed.`);
+  };
+
+  const totalSlots = shifts.reduce((s, sh) => s + sh.slots, 0);
+  const totalBooked = shifts.reduce((s, sh) => s + sh.booked, 0);
+  const fillRate = totalSlots > 0 ? Math.round((totalBooked / totalSlots) * 100) : 0;
+
   return (
-    <div className="p-6">
-      <SectionHeader title="Partner Shift Marketplace" subtitle="Shift scheduling and capacity controls" />
-      <div className="border border-[#E8E8E8] rounded-xl p-12 text-center bg-white">
-        <p className="text-black text-sm font-bold mb-1">Shift Slot Marketplace</p>
-        <p className="text-[#9C9A9A] text-xs">Dynamic shift allocations operate on demand in active zones.</p>
+    <div className="p-6 space-y-6">
+      <SectionHeader title="Partner Shift Marketplace" subtitle="Manage shift allocations and zone capacity controls" />
+
+      {toast && (
+        <div className="fixed top-4 right-4 z-50 bg-black text-white text-xs font-bold px-4 py-3 rounded-xl shadow-lg">
+          {toast}
+        </div>
+      )}
+
+      {/* KPI bar */}
+      <div className="grid grid-cols-4 gap-4">
+        {[
+          { label: 'Total Shifts', value: shifts.length },
+          { label: 'Total Slots', value: totalSlots },
+          { label: 'Booked Slots', value: totalBooked },
+          { label: 'Fill Rate', value: `${fillRate}%` },
+        ].map(k => (
+          <div key={k.label} className="bg-white border border-[#E8E8E8] rounded-xl p-4">
+            <p className="text-[#9C9A9A] text-xs mb-1">{k.label}</p>
+            <p className="text-black text-2xl font-bold">{k.value}</p>
+          </div>
+        ))}
       </div>
+
+      {/* Tabs + action */}
+      <div className="flex items-center justify-between">
+        <div className="flex gap-2">
+          {(['shifts', 'capacity'] as const).map(t => (
+            <button key={t} onClick={() => setActiveTab(t)}
+              className={`px-4 py-2 rounded-xl text-xs font-bold capitalize transition-colors ${activeTab === t ? 'bg-black text-white' : 'bg-[#F5F5F5] text-[#464646] hover:bg-[#EBEBEB]'}`}>
+              {t === 'shifts' ? 'Shift Schedule' : 'Zone Capacity'}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => setShowAddModal(true)}
+          className="px-4 py-2 bg-black text-white text-xs font-bold rounded-xl hover:bg-[#333]">
+          + Add Shift
+        </button>
+      </div>
+
+      {activeTab === 'shifts' && (
+        <div className="bg-white border border-[#E8E8E8] rounded-xl overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="bg-[#F9F9F9] border-b border-[#E8E8E8]">
+              <tr>{['Shift ID', 'Zone', 'Service', 'Date', 'Time Window', 'Slots', 'Booked', 'Fill', 'Status', 'Actions'].map(h => (
+                <th key={h} className="text-left px-4 py-3 text-[#9C9A9A] font-bold uppercase tracking-wide">{h}</th>
+              ))}</tr>
+            </thead>
+            <tbody className="divide-y divide-[#F0F0F0]">
+              {shifts.map(sh => {
+                const fill = sh.slots > 0 ? Math.round((sh.booked / sh.slots) * 100) : 0;
+                const statusColor = sh.status === 'Full' ? 'bg-red-100 text-red-700' : sh.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700';
+                return (
+                  <tr key={sh.id} className="hover:bg-[#FAFAFA]">
+                    <td className="px-4 py-3 font-mono font-bold text-[#9C9A9A]">{sh.id}</td>
+                    <td className="px-4 py-3 font-semibold text-black">{sh.zone}</td>
+                    <td className="px-4 py-3 text-[#464646]">{sh.service}</td>
+                    <td className="px-4 py-3 text-[#464646]">{sh.date}</td>
+                    <td className="px-4 py-3 text-[#464646]">{sh.start} – {sh.end}</td>
+                    <td className="px-4 py-3 font-bold text-black">{sh.slots}</td>
+                    <td className="px-4 py-3 text-[#464646]">{sh.booked}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-16 h-1.5 bg-[#E8E8E8] rounded-full overflow-hidden">
+                          <div className="h-full bg-black rounded-full" style={{ width: `${fill}%` }} />
+                        </div>
+                        <span className="font-bold text-black">{fill}%</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${statusColor}`}>{sh.status}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <button onClick={() => handleDeleteShift(sh.id)}
+                        className="text-red-500 hover:text-red-700 text-xs font-bold">Remove</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {shifts.length === 0 && (
+            <p className="text-center text-[#9C9A9A] text-xs py-8">No shifts scheduled. Click "Add Shift" to create one.</p>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'capacity' && (
+        <div className="grid grid-cols-2 gap-4">
+          {['Lucknow Central', 'Gomti Nagar', 'Hazratganj', 'Alambagh', 'Chinhat', 'Faizabad Road'].map(zone => {
+            const zoneShifts = shifts.filter(s => s.zone === zone);
+            const zSlots = zoneShifts.reduce((s, sh) => s + sh.slots, 0);
+            const zBooked = zoneShifts.reduce((s, sh) => s + sh.booked, 0);
+            const zFill = zSlots > 0 ? Math.round((zBooked / zSlots) * 100) : 0;
+            return (
+              <div key={zone} className="bg-white border border-[#E8E8E8] rounded-xl p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <p className="font-bold text-sm text-black">{zone}</p>
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${zFill >= 90 ? 'bg-red-100 text-red-700' : zFill >= 60 ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}`}>
+                    {zFill}% filled
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-[#E8E8E8] rounded-full overflow-hidden mb-2">
+                  <div className="h-full bg-black rounded-full transition-all" style={{ width: `${zFill}%` }} />
+                </div>
+                <div className="flex justify-between text-xs text-[#9C9A9A]">
+                  <span>{zBooked} booked</span>
+                  <span>{zSlots} total slots</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Add Shift Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowAddModal(false)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+            <h3 className="font-bold text-base text-black mb-4">Add New Shift</h3>
+            <form onSubmit={handleAddShift} className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-[#464646] block mb-1">Zone</label>
+                <select value={form.zone} onChange={e => setForm(f => ({ ...f, zone: e.target.value }))}
+                  className="w-full border border-[#E8E8E8] rounded-xl px-3 py-2 text-xs focus:outline-none">
+                  {['Lucknow Central', 'Gomti Nagar', 'Hazratganj', 'Alambagh', 'Chinhat', 'Faizabad Road'].map(z => <option key={z}>{z}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-[#464646] block mb-1">Service Type</label>
+                <select value={form.service} onChange={e => setForm(f => ({ ...f, service: e.target.value }))}
+                  className="w-full border border-[#E8E8E8] rounded-xl px-3 py-2 text-xs focus:outline-none">
+                  {['Food Delivery', 'Grocery', 'Ride', 'Courier'].map(s => <option key={s}>{s}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-[#464646] block mb-1">Start Time</label>
+                  <input type="time" value={form.start} onChange={e => setForm(f => ({ ...f, start: e.target.value }))}
+                    className="w-full border border-[#E8E8E8] rounded-xl px-3 py-2 text-xs focus:outline-none" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-[#464646] block mb-1">End Time</label>
+                  <input type="time" value={form.end} onChange={e => setForm(f => ({ ...f, end: e.target.value }))}
+                    className="w-full border border-[#E8E8E8] rounded-xl px-3 py-2 text-xs focus:outline-none" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-[#464646] block mb-1">Date</label>
+                <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+                  required className="w-full border border-[#E8E8E8] rounded-xl px-3 py-2 text-xs focus:outline-none" />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-[#464646] block mb-1">Total Slots</label>
+                <input type="number" min="1" max="100" value={form.slots} onChange={e => setForm(f => ({ ...f, slots: e.target.value }))}
+                  className="w-full border border-[#E8E8E8] rounded-xl px-3 py-2 text-xs focus:outline-none" />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setShowAddModal(false)}
+                  className="flex-1 py-2.5 border border-[#E8E8E8] text-xs font-bold rounded-xl hover:bg-[#F5F5F5]">
+                  Cancel
+                </button>
+                <button type="submit"
+                  className="flex-1 py-2.5 bg-black text-white text-xs font-bold rounded-xl hover:bg-[#333]">
+                  Create Shift
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

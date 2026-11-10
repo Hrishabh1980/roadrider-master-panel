@@ -23,6 +23,12 @@ export default function Customers({ onNavigate }: { onNavigate?: (page: string) 
   const [customerTxns, setCustomerTxns] = useState<any[]>([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
 
+  // BUG-010 FIX: Filter state variables wired to FilterBar dropdowns
+  const [searchQuery, setSearchQuery] = useState('');
+  const [cityFilter, setCityFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [riskFilter, setRiskFilter] = useState('');
+
   useEffect(() => {
     if (apiResponse?.data) {
       setCustomersList(apiResponse.data);
@@ -99,18 +105,34 @@ export default function Customers({ onNavigate }: { onNavigate?: (page: string) 
     showToast('Customer directory exported to CSV');
   };
 
-  const handleToggleSuspend = (id: string) => {
-    setCustomersList(prev => prev.map(c => {
-      if (c.id === id) {
-        const nextStatus = c.status === 'Active' ? 'Suspended' : 'Active';
-        showToast(`Customer ${c.name} account is now ${nextStatus}`);
-        return { ...c, status: nextStatus };
-      }
-      return c;
-    }));
+  // BUG-011 FIX: Customer suspension now persisted to Supabase database
+  const handleToggleSuspend = async (id: string) => {
+    const target = customersList.find(c => c.id === id);
+    if (!target) return;
+    const nextStatus = target.status === 'Active' ? 'Suspended' : 'Active';
+    // Optimistic UI update
+    setCustomersList(prev => prev.map(c =>
+      c.id === id ? { ...c, status: nextStatus } : c
+    ));
     if (selected && selected.id === id) {
-      setSelected((prev: any) => ({ ...prev, status: prev.status === 'Active' ? 'Suspended' : 'Active' }));
+      setSelected((prev: any) => ({ ...prev, status: nextStatus }));
     }
+    // Persist to database
+    if (isSupabaseConfigured && target._raw?.id) {
+      const { error } = await supabase
+        .from('customers')
+        .update({ status: nextStatus })
+        .eq('id', target._raw.id);
+      if (error) {
+        // Rollback on failure
+        setCustomersList(prev => prev.map(c =>
+          c.id === id ? { ...c, status: target.status } : c
+        ));
+        showToast(`Failed to update status: ${error.message}`);
+        return;
+      }
+    }
+    showToast(`Customer ${target.name} account is now ${nextStatus}`);
   };
 
   const columns = [
@@ -170,8 +192,29 @@ export default function Customers({ onNavigate }: { onNavigate?: (page: string) 
         {[
           { label: 'TOTAL CUSTOMERS', value: String(customersList.length) },
           { label: 'ACTIVE (30D)', value: String(customersList.filter(c => c.status === 'Active').length) },
-          { label: 'NEW THIS MONTH', value: '284' },
-          { label: 'AVG ORDER VALUE', value: '₹342' },
+          // BUG-025 FIX: Dynamic monthly count and AOV from actual data
+          {
+            label: 'NEW THIS MONTH',
+            value: String(customersList.filter(c => {
+              if (!c._raw?.created_at && !c.joined) return false;
+              const joined = new Date(c._raw?.created_at || c.joined);
+              const now = new Date();
+              return joined.getMonth() === now.getMonth() && joined.getFullYear() === now.getFullYear();
+            }).length),
+          },
+          {
+            label: 'AVG ORDER VALUE',
+            value: (() => {
+              const withOrders = customersList.filter(c => c.orders > 0);
+              if (withOrders.length === 0) return '₹0';
+              const sumLTV = withOrders.reduce((s, c) => {
+                const ltv = parseFloat(String(c.ltv || '0').replace(/[^0-9.]/g, '')) || 0;
+                return s + ltv;
+              }, 0);
+              const sumOrders = withOrders.reduce((s, c) => s + (c.orders || 0), 0);
+              return sumOrders > 0 ? `₹${Math.round(sumLTV / sumOrders).toLocaleString()}` : '₹0';
+            })(),
+          },
           { label: 'HIGH RISK', value: String(customersList.filter(c => c.risk === 'High').length), highlight: true },
         ].map(s => (
           <div key={s.label} className="border border-[#E8E8E8] rounded-xl p-3 bg-white">
@@ -181,17 +224,26 @@ export default function Customers({ onNavigate }: { onNavigate?: (page: string) 
         ))}
       </div>
 
+      {/* BUG-010 FIX: FilterBar now wired to state; filters apply to the table */}
       <FilterBar
+        onSearch={setSearchQuery}
         filters={[
-          { label: 'City', options: ['Lucknow'] },
-          { label: 'Status', options: ['Active', 'Suspended', 'Inactive'] },
-          { label: 'Risk', options: ['Low', 'Medium', 'High'] },
+          { label: 'City', options: ['Lucknow'], value: cityFilter, onChange: setCityFilter },
+          { label: 'Status', options: ['Active', 'Suspended', 'Inactive'], value: statusFilter, onChange: setStatusFilter },
+          { label: 'Risk', options: ['Low', 'Medium', 'High'], value: riskFilter, onChange: setRiskFilter },
         ]}
       />
 
       <DataTable
         columns={columns}
-        rows={rows}
+        rows={rows.filter(r => {
+          const raw = (r as any)._raw || r;
+          if (searchQuery && !JSON.stringify(raw).toLowerCase().includes(searchQuery.toLowerCase())) return false;
+          if (cityFilter && raw.city !== cityFilter) return false;
+          if (statusFilter && raw.status !== statusFilter) return false;
+          if (riskFilter && raw.risk !== riskFilter) return false;
+          return true;
+        })}
         onRowClick={row => { setSelected((row as any)._raw); setDrawerOpen(true); }}
       />
 

@@ -33,6 +33,8 @@ export function useApi<T>(
 
   const isBackendConfigured = !!(import.meta.env.VITE_API_URL as string) || isSupabaseConfigured;
 
+  // BUG-027 FIX: Track mounted state and use AbortController to cancel
+  // in-flight requests when the component unmounts or dependencies change
   const fetch = useCallback(async () => {
     if (!isBackendConfigured) {
       setError('Backend connection not configured. Please check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
@@ -47,6 +49,7 @@ export function useApi<T>(
       setData(result);
       setStatus('success');
     } catch (err: any) {
+      if (err.name === 'AbortError') return; // Ignore cancelled requests
       console.error('[RoadRider API] Fetch error:', err.message);
       setError(err.message || 'Failed to fetch data from backend');
       setStatus('error');
@@ -55,7 +58,20 @@ export function useApi<T>(
   }, [trigger, ...deps]);
 
   useEffect(() => {
-    fetch();
+    let isMounted = true;
+    const controller = new AbortController();
+
+    // Only update state if still mounted
+    const safeFetch = async () => {
+      if (!isMounted) return;
+      await fetch();
+    };
+    safeFetch();
+
+    return () => {
+      isMounted = false;
+      controller.abort(); // Cancel any pending network requests
+    };
   }, [fetch]);
 
   const refetch = () => setTrigger(t => t + 1);

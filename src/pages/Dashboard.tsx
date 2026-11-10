@@ -28,10 +28,14 @@ export default function Dashboard({ onNavigate }: { onNavigate: (page: string) =
 
   // Real backend queries via Supabase integration
   const { data: citiesData } = useApi(() => citiesApi.getAll(), []);
+  // BUG-015 FIX: Pass both city and service filters to summary query
   const { data: summaryData, loading, error, refetch } = useApi(
-    () => dashboardApi.getSummary(cityFilter === 'All Cities' ? undefined : cityFilter),
+    () => dashboardApi.getSummary(
+      cityFilter === 'All Cities' ? undefined : cityFilter,
+      serviceFilter === 'All Services' ? undefined : serviceFilter
+    ),
     undefined,
-    [cityFilter]
+    [cityFilter, serviceFilter]
   );
 
   const { data: liveJobsData } = useApi(
@@ -64,11 +68,8 @@ export default function Dashboard({ onNavigate }: { onNavigate: (page: string) =
     [cityFilter]
   );
 
-  const { data: cancelTrendData } = useApi(
-    () => dashboardApi.getCancellationTrend(),
-    [],
-    [cityFilter]
-  );
+  // BUG-017 FIX: getCancellationTrend query removed — data was never rendered
+  // const { data: cancelTrendData } = useApi(() => dashboardApi.getCancellationTrend(), [], [cityFilter]);
 
   // Live alerts from Supabase
   const { data: pendingKycData } = useApi(() => kycApi.getAll({ status: 'pending' }), []);
@@ -81,7 +82,7 @@ export default function Dashboard({ onNavigate }: { onNavigate: (page: string) =
   const orderTrend = orderTrendData || [];
   const partnerAvail = partnerAvailData || [];
   const paymentHealth = paymentHealthData || [];
-  const cancelTrend = cancelTrendData || [];
+  // BUG-017 FIX: cancelTrend removed (unused)
 
   // Compute live attention items based on actual database counts
   const needsAttentionItems: Array<{ icon: React.ReactNode; label: string; sub: string; type: 'warning' | 'info'; targetPage: string }> = [];

@@ -59,13 +59,14 @@ export default function Promotions({ onNavigate }: { onNavigate?: (page: string)
 
     if (isSupabaseConfigured) {
       try {
+        // BUG-009 FIX: Column names aligned with supabase_schema.sql
         const { error } = await supabase.from('promotions').insert({
           code: code.trim().toUpperCase(),
-          discount_type: 'percentage',
-          discount_value: parseInt(discount) || 20,
-          min_order_amount: Number(minOrder) || 0,
-          max_discount_amount: Number(maxDiscount) || 100,
-          is_active: true,
+          service: 'All',
+          discount: `${parseInt(discount) || 20}% OFF`,
+          min_order: Number(minOrder) || 0,
+          max_discount: Number(maxDiscount) || 100,
+          status: 'Active',
         });
 
         if (error) {

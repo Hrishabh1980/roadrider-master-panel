@@ -625,7 +625,8 @@ export function Categories({ onNavigate }: { onNavigate?: (page: string) => void
 
     if (isSupabaseConfigured) {
       try {
-        const { error } = await supabase.from('product_categories').insert({
+        // BUG-009 FIX: correct table name (marketplace_categories)
+        const { error } = await supabase.from('marketplace_categories').insert({
           name: catName.trim(),
           business_type: catService.toLowerCase(),
           is_active: true,

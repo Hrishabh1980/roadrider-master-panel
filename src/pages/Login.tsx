@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Lock, Mail, Eye, EyeOff, Key, Fingerprint,
+  Lock, Mail, Eye, EyeOff,
   AlertTriangle, ArrowRight, Shield, Database, CheckCircle2
 } from 'lucide-react';
 import { authApi } from '../services/api';
@@ -11,12 +11,12 @@ interface LoginProps {
 }
 
 export default function Login({ onLoginSuccess }: LoginProps) {
-  const [email, setEmail] = useState('techroadrider@gmail.com');
+  const [email, setEmail] = useState(''); // BUG-020 FIX: removed hardcoded production email
   const [password, setPassword] = useState('');
-  const [twoFactorCode, setTwoFactorCode] = useState('');
+
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
-  const [requires2FA, setRequires2FA] = useState(false);
+  // BUG-005 FIX: 2FA state removed – UI was decoupled from backend MFA verification
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +29,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       const res = await authApi.login({
         email,
         password,
-        code: requires2FA ? twoFactorCode : undefined,
+
       });
       onLoginSuccess(res.user);
     } catch (err: any) {
@@ -77,6 +77,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
         </p>
 
         {/* Supabase backend status pill */}
+        {/* BUG-020 FIX: Removed hardcoded production admin email from public display */}
         <div className="mb-5 flex flex-col gap-1.5 p-3 rounded-xl bg-[#1A1A1A] border border-[#2A2A2A] text-xs">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -93,8 +94,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           </div>
           <div className="flex items-center gap-1.5 text-[11px] text-[#8E8E8E] pt-1 border-t border-[#262626]">
             <CheckCircle2 className="w-3.5 h-3.5 text-[#A35E47]" />
-            <span>Designated Master Admin:</span>
-            <span className="font-mono text-white text-[11px]">techroadrider@gmail.com</span>
+            <span>Administrative access requires a verified admin role in profiles.</span>
           </div>
         </div>
 
@@ -125,7 +125,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="techroadrider@gmail.com"
+                placeholder="admin@example.com"
                 className="w-full pl-10 pr-4 py-2.5 bg-white text-black placeholder-[#777777] rounded-xl text-xs sm:text-[13px] font-medium outline-none focus:ring-2 focus:ring-[#A35E47] transition-all"
               />
             </div>
@@ -137,9 +137,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               <label className="block text-[11px] font-bold text-[#A0A0A0] uppercase tracking-wider">
                 Master Password / Security Key
               </label>
-              <span className="text-[11px] text-[#7A7A7A] hover:text-[#A0A0A0] font-medium cursor-pointer transition-colors">
-                Enterprise Reset
-              </span>
+              {/* BUG-021 FIX: Enterprise Reset requires backend password-reset email – contact DB admin */}
             </div>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#555555]">
@@ -163,30 +161,8 @@ export default function Login({ onLoginSuccess }: LoginProps) {
             </div>
           </div>
 
-          {/* Optional 2FA Security Token */}
-          {requires2FA && (
-            <div className="pt-1">
-              <label className="block text-[11px] font-bold text-[#A35E47] uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                <Key className="w-3.5 h-3.5" />
-                2FA Security Authenticator Code (6-Digit)
-              </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#6E6E6E]">
-                  <Fingerprint className="w-4 h-4 text-[#A35E47]" />
-                </div>
-                <input
-                  type="text"
-                  maxLength={6}
-                  value={twoFactorCode}
-                  onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, ''))}
-                  placeholder="e.g. 749201"
-                  className="w-full pl-10 pr-4 py-2.5 bg-[#0A0A0A] border border-[#A35E47] focus:ring-1 focus:ring-[#A35E47] rounded-xl text-white text-xs placeholder-[#555555] outline-none font-mono tracking-widest text-center"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Remember Workstation & 2FA Toggle */}
+          {/* BUG-005 FIX: 2FA toggle removed – MFA must be verified server-side via
+              supabase.auth.mfa.challengeAndVerify before it can be re-enabled in the UI */}
           <div className="flex items-center justify-between pt-1">
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
@@ -197,14 +173,6 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               />
               <span className="text-xs text-[#9C9A9A]">Remember workstation</span>
             </label>
-
-            <button
-              type="button"
-              onClick={() => setRequires2FA(!requires2FA)}
-              className="text-xs font-semibold text-[#8E8E8E] hover:text-white transition-colors cursor-pointer"
-            >
-              {requires2FA ? '— Disable 2FA Code' : '+ Add 2FA Code'}
-            </button>
           </div>
 
           {/* Submit CTA */}

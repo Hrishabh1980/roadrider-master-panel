@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { supabase, isSupabaseConfigured, subscribeToTable, subscribeToTables } from '../services/supabase';
 
 export interface BadgeCounts {
@@ -41,6 +41,10 @@ export function BadgeProvider({ children }: { children: React.ReactNode }) {
   const [badgeCounts, setBadgeCounts] = useState<BadgeCounts>(defaultCounts);
   const [loading, setLoading] = useState<boolean>(true);
 
+  // BUG-022 FIX: Debounce ref prevents realtime avalanche queries
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // fetchBadgeCounts is defined first so debouncedFetchBadgeCounts can reference it
   const fetchBadgeCounts = useCallback(async () => {
     if (!isSupabaseConfigured) {
       setLoading(false);
@@ -146,6 +150,14 @@ export function BadgeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // BUG-022 FIX: Debounced wrapper — defined AFTER fetchBadgeCounts so the reference is valid
+  const debouncedFetchBadgeCounts = useCallback(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      fetchBadgeCounts();
+    }, 1000); // 1000ms debounce window
+  }, [fetchBadgeCounts]);
+
   useEffect(() => {
     fetchBadgeCounts();
 
@@ -153,10 +165,11 @@ export function BadgeProvider({ children }: { children: React.ReactNode }) {
 
     // Subscribe to realtime changes across tables using a single combined channel
     // All listeners are registered before .subscribe() is called
+    // BUG-022 FIX: Use debounced version in realtime callback to prevent query flooding
     const unsubscribe = subscribeToTables(
       ['orders', 'support_tickets', 'kyc_documents', 'risk_cases', 'transactions', 'notifications', 'vendors', 'partners'],
       () => {
-        fetchBadgeCounts();
+        debouncedFetchBadgeCounts();
       }
     );
 

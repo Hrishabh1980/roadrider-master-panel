@@ -11,8 +11,6 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",
-    "@tailwindcss/oxide-darwin-arm64": "^4.3.5",
-    "lightningcss-darwin-arm64": "^1.29.1",
     "lucide-react": "^1.48.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
